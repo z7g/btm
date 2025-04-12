@@ -26,8 +26,11 @@ import java.net.InetAddress;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.format.DateTimeParseException;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Configuration repository of the transaction manager. You can set configurable values either via the properties file
@@ -852,7 +855,44 @@ public class Configuration implements Service {
      * @return Duration value
      */
     static Duration getDuration(Properties properties, String key, Duration defaultValue) {
-        return Duration.parse(getString(properties, key, defaultValue.toString()));
+        String value = getString(properties, key, defaultValue.toString());
+        if (value == null || value.isEmpty()) {
+            return defaultValue;
+        }
+
+        // Remove whitespace and convert to lowercase for consistent parsing
+        value = value.trim().toLowerCase();
+
+        // Try parsing as a standard Duration string first (e.g., PT1H)
+        try {
+            return Duration.parse(value);
+        } catch (DateTimeParseException e) {
+            // Not a standard ISO-8601 duration, proceed with custom parsing
+        }
+
+        // Match numeric value and optional unit
+        Pattern pattern = Pattern.compile("^(\\d+\\.?\\d*)\\s*([a-zA-Z]*)$");
+        Matcher matcher = pattern.matcher(value);
+        if (!matcher.matches()) {
+            throw new IllegalArgumentException("Invalid duration format: " + value);
+        }
+
+        // Extract value and unit
+        double number = Double.parseDouble(matcher.group(1));
+        String unit = matcher.group(2);
+
+        // Handle units or default to milliseconds if none specified
+        return switch (unit) {
+            case "ns", "nanos" -> Duration.ofNanos((long) (number * 1_000_000));
+            case "us", "micros" -> Duration.ofNanos((long) (number * 1_000_000_000 / 1_000));
+            case "ms", "millis" -> Duration.ofMillis((long) number);
+            case "s", "seconds" -> Duration.ofSeconds((long) number);
+            case "m", "minutes" -> Duration.ofMinutes((long) number);
+            case "h", "hours" -> Duration.ofHours((long) number);
+            case "d", "days" -> Duration.ofDays((long) number);
+            case "" -> Duration.ofMillis((long) number); // Default unit is milliseconds
+            default -> throw new IllegalArgumentException("Unknown duration unit: " + unit);
+        };
     }
 
     private static String evaluate(Properties properties, String value) {
